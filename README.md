@@ -111,6 +111,12 @@ server/
 | `course_musics` | 课程歌曲分配（含已播放标记） |
 | `app_settings` | 通用配置（持久化网易云登录 cookie） |
 
+改动 SQL 后可在本地验证全部语句（用 WASM 版 Postgres 执行，无需真实数据库）：
+
+```bash
+npm run verify:sql
+```
+
 ## 部署说明
 
 - **Vercel + Neon**：将仓库导入 Vercel，配置环境变量 `DATABASE_URL` 即可构建部署（Nitro 自动产出 Serverless Functions）

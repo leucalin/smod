@@ -139,8 +139,8 @@ function getSql(): NeonQueryFunction {
   return sql
 }
 
-const DDL = `
-CREATE TABLE IF NOT EXISTS musics (
+const DDL_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS musics (
   id BIGSERIAL PRIMARY KEY,
   title TEXT NOT NULL,
   source TEXT NOT NULL DEFAULT 'bilibili',
@@ -156,12 +156,12 @@ CREATE TABLE IF NOT EXISTS musics (
   netease_id BIGINT,
   removed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-ALTER TABLE musics ADD COLUMN IF NOT EXISTS netease_id BIGINT;
-ALTER TABLE musics ADD COLUMN IF NOT EXISTS removed_at TIMESTAMPTZ;
-CREATE UNIQUE INDEX IF NOT EXISTS uniq_musics_netease
-  ON musics(netease_id) WHERE netease_id IS NOT NULL;
-CREATE TABLE IF NOT EXISTS courses (
+);`,
+  `ALTER TABLE musics ADD COLUMN IF NOT EXISTS netease_id BIGINT;`,
+  `ALTER TABLE musics ADD COLUMN IF NOT EXISTS removed_at TIMESTAMPTZ;`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uniq_musics_netease
+  ON musics(netease_id) WHERE netease_id IS NOT NULL;`,
+  `CREATE TABLE IF NOT EXISTS courses (
   id BIGSERIAL PRIMARY KEY,
   title TEXT NOT NULL,
   date TEXT NOT NULL,
@@ -169,28 +169,44 @@ CREATE TABLE IF NOT EXISTS courses (
   played INT NOT NULL DEFAULT 0,
   unplayed INT NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS course_musics (
+);`,
+  `CREATE TABLE IF NOT EXISTS course_musics (
   id BIGSERIAL PRIMARY KEY,
   course_id BIGINT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
   music_id BIGINT NOT NULL REFERENCES musics(id) ON DELETE CASCADE,
   position INT NOT NULL DEFAULT 0,
   is_played BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_course_musics_course ON course_musics(course_id);
-CREATE TABLE IF NOT EXISTS app_settings (
+);`,
+  `CREATE INDEX IF NOT EXISTS idx_course_musics_course ON course_musics(course_id);`,
+  `CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-`
+);`,
+]
 
-/** 首次访问时自动建表（幂等） */
+
+/**
+ * 首次访问时自动建表（幂等）
+ * 注意：Neon 驱动的 sql 只能以 tagged template 或 sql.query(字符串) 调用，
+ * 因此这里逐条执行，避免多语句与调用形式限制
+ */
 export async function ensureSchema(): Promise<void> {
   if (!hasDb() || schemaReady) return
-  await getSql()(DDL)
-  schemaReady = true
+  const s = getSql()
+  try {
+    for (const statement of DDL_STATEMENTS) {
+      await s.query(statement)
+    }
+    schemaReady = true
+  } catch (err) {
+    console.error(
+      '[db] 初始化数据表失败：',
+      err instanceof Error ? err.message : err,
+    )
+    throw err
+  }
 }
 
 /** 随机抽取 count 首并写入分配（已存在分配则先清空；可同时更新标题） */
@@ -312,28 +328,67 @@ export async function insertMusic(
 
   await ensureSchema()
   const s = getSql()
-  const rows = await s`
-    INSERT INTO musics (title, source, artist, album, cover, up, duration, bvid, aid, play, pubdate, netease_id)
-    VALUES (${music.title}, ${music.source}, ${music.artist}, ${music.album},
-            ${music.cover}, ${music.up ?? null}, ${music.duration ?? null},
-            ${music.bvid ?? null}, ${music.aid ?? null}, ${music.play ?? null},
-            ${music.pubdate ?? null}, ${music.neteaseId ?? null})
-    ON CONFLICT DO UPDATE SET
-      removed_at = NULL,
-      title = EXCLUDED.title,
-      source = EXCLUDED.source,
-      artist = EXCLUDED.artist,
-      album = EXCLUDED.album,
-      cover = EXCLUDED.cover,
-      up = EXCLUDED.up,
-      duration = EXCLUDED.duration,
-      aid = EXCLUDED.aid,
-      play = EXCLUDED.play,
-      pubdate = EXCLUDED.pubdate,
-      netease_id = EXCLUDED.netease_id
-    RETURNING *
-  `
-  return { code: 0, item: rowToMusic(rows[0]) }
+
+  // Postgres 的 ON CONFLICT DO UPDATE 必须指定冲突目标，而我们有 bvid 与
+  // netease_id 两个唯一键，故采用「先查后更新/插入」的写法
+  const conditions: string[] = []
+  const condParams: (string | number)[] = []
+  if (music.bvid) {
+    conditions.push(`bvid = $${condParams.length + 1}`)
+    condParams.push(music.bvid)
+  }
+  if (music.neteaseId != null) {
+    conditions.push(`netease_id = $${condParams.length + 1}`)
+    condParams.push(music.neteaseId)
+  }
+  const where = conditions.length ? `(${conditions.join(' OR ')})` : ''
+
+  if (where) {
+    const found = await s.query<{ id: string; removed_at: string | null }>(
+      `SELECT * FROM musics WHERE ${where} LIMIT 1`,
+      condParams,
+    )
+    if (found.length) {
+      const wasRemoved = found[0].removed_at != null
+      const updated = await s.query(
+        `UPDATE musics SET
+           removed_at = NULL, title = $1, source = $2, artist = $3, album = $4,
+           cover = $5, up = $6, duration = $7,
+           bvid = COALESCE($8, bvid), aid = $9, play = $10, pubdate = $11,
+           netease_id = COALESCE($12, netease_id)
+         WHERE id = $13
+         RETURNING *`,
+        [
+          music.title, music.source, music.artist, music.album, music.cover,
+          music.up ?? null, music.duration ?? null, music.bvid ?? null,
+          music.aid ?? null, music.play ?? null, music.pubdate ?? null,
+          music.neteaseId ?? null, found[0].id,
+        ],
+      )
+      return { code: wasRemoved ? 0 : 1, item: rowToMusic(updated[0]) }
+    }
+  }
+
+  const inserted = await s.query(
+    `INSERT INTO musics (title, source, artist, album, cover, up, duration, bvid, aid, play, pubdate, netease_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+     ON CONFLICT DO NOTHING
+     RETURNING *`,
+    [
+      music.title, music.source, music.artist, music.album, music.cover,
+      music.up ?? null, music.duration ?? null, music.bvid ?? null,
+      music.aid ?? null, music.play ?? null, music.pubdate ?? null,
+      music.neteaseId ?? null,
+    ],
+  )
+  if (inserted.length) return { code: 0, item: rowToMusic(inserted[0]) }
+
+  // 并发插入兜底：重新查询已存在记录
+  const again = where
+    ? await s.query(`SELECT * FROM musics WHERE ${where} LIMIT 1`, condParams)
+    : []
+  if (again.length) return { code: 1, item: rowToMusic(again[0]) }
+  return { code: 1, item: rowToMusic({ ...music, id: '0' }) }
 }
 
 /**
