@@ -67,6 +67,7 @@ node .output/server/index.mjs
 | `DATABASE_URL` | 建议 | Neon Postgres 连接串。未配置时使用内存数据（重启即丢失，仅本地调试） |
 | `NETEASE_API_BASE` | 可选 | 改用独立部署的 NeteaseCloudMusicApiEnhanced 服务时填写 |
 | `NETEASE_REAL_IP` | 可选 | 服务端网易云请求携带的出口 IP 标识（`X-Real-IP`）。部署在海外节点（如 Vercel）时建议配置一个国内 IP，规避海外 IP 的播放限制与风控 |
+| `BILIBILI_PROXY` | 海外部署必填 | bilibili 请求使用的国内 HTTP(S) 代理。bilibili 对海外 IP 返回 412（搜索与取流都会失败），配置后所有 bilibili 请求经由该代理发出，例如 `http://user:pass@1.2.3.4:8080` |
 
 ## 目录结构
 
@@ -122,4 +123,4 @@ npm run verify:sql
 - **Vercel + Neon**：将仓库导入 Vercel，配置环境变量 `DATABASE_URL` 即可构建部署（Nitro 自动产出 Serverless Functions）
 - **网易云登录态**：登录 cookie 保存在**服务端**（`app_settings` 表），因此在家扫码登录后，到学校打开同一站点仍是登录状态，一体机无需重复登录。请勿将站点公开到公网——服务端保存的是账号凭据，任何能访问站点的人都会使用该账号播放
 - **出口 IP**：网易云的登录与全部账号级请求都在服务端发起（浏览器只负责显示二维码与拉取音频流），不存在前后端 IP 不一致问题；部署在海外节点时建议固定函数区域并配置 `NETEASE_REAL_IP`
-- **bilibili 取流**：经由服务端代理转发，需保证运行环境可访问 bilibili
+- **bilibili 与海外部署**：bilibili 对**海外 IP 返回 412 风控**（搜索与取流都会失败，表现为 `412 Precondition Failed`）。海外节点（Vercel 默认区域）请配置 `BILIBILI_PROXY` 指向一台国内服务器的 HTTP 代理（tinyproxy / gost / squid 均可），系统会自动让全部 bilibili 请求走该代理；被 412 拦截时还会自动刷新会话重试一次。若长期使用，**最稳的方案是把整站部署在国内服务器**（`node .output/server/index.mjs`），bilibili 与网易云都不再受 IP 限制
