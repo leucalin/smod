@@ -8,10 +8,71 @@
 // ============================================================
 
 import { createHash } from 'node:crypto'
+import { mergeCookieStrings, normalizeSetCookie } from './cookie'
+import { getSetting, setSetting, deleteSetting } from './db'
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
 const REFERER = 'https://www.bilibili.com/'
+
+/** 登录相关接口（passport）所需请求头 */
+const PASSPORT_HEADERS = {
+  'User-Agent': UA,
+  Referer: 'https://www.bilibili.com/',
+  Origin: 'https://www.bilibili.com',
+  Accept: 'application/json, text/plain, */*',
+  'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+}
+
+/* ---------- 登录态（cookie）管理 ----------
+ * 登录 cookie 保存在服务端（Neon app_settings 表；未配置数据库时为进程内存），
+ * 与浏览器无关，登录一次后所有设备共用，也可降低接口风控概率。
+ */
+
+const BILI_COOKIE_KEY = 'bilibili_cookie'
+let biliCookieCache: string | undefined
+
+/** 读取已保存的 bilibili 登录 cookie */
+export async function getBiliLoginCookie(): Promise<string> {
+  if (biliCookieCache !== undefined) return biliCookieCache
+  try {
+    biliCookieCache = (await getSetting(BILI_COOKIE_KEY)) ?? ''
+  } catch {
+    biliCookieCache = ''
+  }
+  return biliCookieCache
+}
+
+/** 保存/合并登录 cookie */
+export async function saveBiliLoginCookie(input?: unknown): Promise<string> {
+  const incoming = typeof input === 'string' ? input : normalizeSetCookie(input)
+  if (!incoming) return await getBiliLoginCookie()
+  const merged = mergeCookieStrings(await getBiliLoginCookie(), incoming)
+  biliCookieCache = merged
+  try {
+    await setSetting(BILI_COOKIE_KEY, merged)
+  } catch (err) {
+    console.warn('[bilibili] 登录 cookie 持久化失败（可能未配置数据库）：', err)
+  }
+  return merged
+}
+
+/** 清除登录态 */
+export async function clearBiliLoginCookie(): Promise<void> {
+  biliCookieCache = ''
+  try {
+    await deleteSetting(BILI_COOKIE_KEY)
+  } catch {
+    // 忽略
+  }
+}
+
+/** 是否已登录（存在 SESSDATA 即视为已登录） */
+export async function isBiliLoggedIn(): Promise<boolean> {
+  const cookie = await getBiliLoginCookie()
+  return /(^|;\s*)SESSDATA=/.test(cookie)
+}
+
 
 const MIXIN_KEY_ENC_TAB = [
   46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
@@ -79,6 +140,12 @@ export async function getBiliSession(): Promise<BiliSession> {
       seen.add(key)
       cookies.push(c)
     }
+  }
+  // 已登录时优先使用登录 cookie（SESSDATA / bili_jct 等）
+  const loginCookie = await getBiliLoginCookie()
+  for (const kv of loginCookie.split(';')) {
+    const item = kv.trim()
+    if (item) addCookie(item)
   }
   addCookie(`buvid3=${res.data.b_3}`)
   if (res.data.b_4) addCookie(`buvid4=${res.data.b_4}`)
@@ -231,4 +298,129 @@ export async function getStreamUrl(bvid: string): Promise<StreamInfo | null> {
   }
   streamCache.set(bvid, { ...info, at: Date.now() })
   return info
+}
+
+/* ---------- 扫码登录 ---------- */
+
+/** 清除会话与 WBI 密钥缓存（登录态变化时调用） */
+export function resetSession() {
+  sessionCache = null
+  wbiCache = null
+}
+
+export interface BiliQrLoginData {
+  key: string
+  /** base64 data URL，供页面直接展示 */
+  qrimg: string
+  qrurl: string
+}
+
+/** 生成登录二维码（b 站返回二维码内容链接，服务端渲染为图片） */
+export async function biliQrGenerate(): Promise<BiliQrLoginData | null> {
+  const res = await $fetch<{
+    code: number
+    message?: string
+    data?: { url?: string; qrcode_key?: string }
+  }>('https://passport.bilibili.com/x/passport-login/web/qrcode/generate', {
+    headers: PASSPORT_HEADERS,
+  })
+  if (res.code !== 0 || !res.data?.qrcode_key || !res.data.url) return null
+
+  const QRCode = await import('qrcode')
+  const qrimg = await QRCode.toDataURL(res.data.url, {
+    margin: 1,
+    width: 360,
+    color: { dark: '#1d1d1f', light: '#ffffff' },
+  })
+  return { key: res.data.qrcode_key, qrimg, qrurl: res.data.url }
+}
+
+export interface BiliQrCheckResult {
+  /** 86101 未扫码 / 86090 已扫码待确认 / 0 成功 / 86038 二维码失效 */
+  code: number
+  message: string
+  loggedIn: boolean
+}
+
+/** 轮询扫码状态；成功时保存登录 cookie */
+export async function biliQrCheck(key: string): Promise<BiliQrCheckResult> {
+  const res = await fetch(
+    `https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=${encodeURIComponent(key)}`,
+    { headers: PASSPORT_HEADERS },
+  )
+  const body = (await res.json()) as {
+    code: number
+    data?: { code?: number; message?: string; url?: string }
+  }
+  const code = Number(body?.data?.code ?? -1)
+  if (code === 0) {
+    const setCookies = (res.headers as any).getSetCookie?.() ?? []
+    await saveBiliLoginCookie(setCookies)
+    resetSession()
+  }
+  return {
+    code,
+    message: body?.data?.message ?? '',
+    loggedIn: code === 0,
+  }
+}
+
+export interface BiliAccount {
+  loggedIn: boolean
+  uname: string
+  face: string
+  mid: number | null
+  vip: boolean
+}
+
+/** 查询当前登录状态与账号信息（nav 接口） */
+export async function biliLoginStatus(): Promise<BiliAccount> {
+  const empty: BiliAccount = { loggedIn: false, uname: '', face: '', mid: null, vip: false }
+  if (!(await isBiliLoggedIn())) return empty
+  resetSession()
+  const session = await getBiliSession()
+  const res = await $fetch<{
+    code: number
+    data?: {
+      isLogin?: boolean
+      uname?: string
+      face?: string
+      mid?: number
+      vipStatus?: number
+    }
+  }>('https://api.bilibili.com/x/web-interface/nav', {
+    headers: { ...BROWSER_HEADERS, Referer: REFERER, Cookie: session.cookie },
+  })
+  const d = res.data
+  if (!d?.isLogin) return empty
+  return {
+    loggedIn: true,
+    uname: d.uname ?? '',
+    face: d.face ?? '',
+    mid: d.mid ?? null,
+    vip: Number(d.vipStatus ?? 0) === 1,
+  }
+}
+
+/** 退出登录（调用官方退出接口并清除本地 cookie） */
+export async function biliLogout(): Promise<void> {
+  try {
+    const cookie = await getBiliLoginCookie()
+    const csrf = /(^|;\s*)bili_jct=([^;]+)/.exec(cookie)?.[2] ?? ''
+    if (csrf) {
+      await fetch('https://passport.bilibili.com/login/exit/v2', {
+        method: 'POST',
+        headers: {
+          ...PASSPORT_HEADERS,
+          Cookie: cookie,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: `biliCSRF=${encodeURIComponent(csrf)}`,
+      })
+    }
+  } catch {
+    // 忽略退出接口异常，仍然清除本地 cookie
+  }
+  await clearBiliLoginCookie()
+  resetSession()
 }
