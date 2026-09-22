@@ -1,6 +1,6 @@
 // GET /api/bilibili/playurl?bvid=xxx —— 获取 bilibili MV 的 MP4 播放直链
 // 视频流 CDN 无防盗链且媒体加载不受 CORS 限制，前端 <video> 可直连播放
-import { getStreamUrl, antiCrawlHint } from '../../utils/bilibili'
+import { getStreamUrl } from '../../utils/bilibili'
 
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
@@ -9,17 +9,9 @@ export default defineEventHandler(async (event) => {
 
   try {
     const info = await getStreamUrl(bvid)
-    if (!info) {
-      return {
-        code: -1,
-        message: `获取视频播放地址失败（可能为会员专属视频，或请求被 bilibili 拦截）${antiCrawlHint()}`,
-      }
-    }
+    if (!info) return { code: -1, message: '获取视频播放地址失败（可能为大会员专属或接口风控）' }
     return { code: 0, message: 'ok', data: info }
   } catch (err: any) {
-    return {
-      code: -1,
-      message: `${err?.statusMessage ?? err?.message ?? '未知错误'}${antiCrawlHint()}`,
-    }
+    return { code: -1, message: '获取视频播放地址异常：' + (err?.message ?? '未知错误') }
   }
 })

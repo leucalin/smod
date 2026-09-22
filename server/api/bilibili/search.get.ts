@@ -5,10 +5,6 @@ import {
   encWbiQuery,
   biliErrorMessage,
   resetWbiCache,
-  resetSession,
-  biliJson,
-  antiCrawlHint,
-  type BiliResponse,
 } from '../../utils/bilibili'
 
 interface SearchResultItem {
@@ -20,17 +16,6 @@ interface SearchResultItem {
   duration: string
   play: number
   pubdate: number
-}
-
-interface SearchBody {
-  code: number
-  message: string
-  data?: {
-    numResults?: number
-    numPages?: number
-    result?: SearchResultItem[]
-    v_voucher?: string
-  }
 }
 
 const TOP_TITLE_WORDS = /(《|【|MV|mv|官方|完整|超清|高清|1080|4K|无损|现场|live|Live|翻唱|剪辑|remix|伴奏|纯享|修复|合集|歌词|动态|精选|经典|串烧|循环|后台|播放)/
@@ -86,61 +71,50 @@ export default defineEventHandler(async (event) => {
     return { code: -400, message: '缺少搜索关键词 keyword' }
   }
 
-  const baseParams = {
-    search_type: 'video',
-    keyword,
-    order: 'totalrank',
-    page,
-  }
-
-  /** 发起一次搜索请求（自动携带会话 cookie） */
-  const doSearch = async (): Promise<BiliResponse<SearchBody>> => {
-    const session = await getBiliSession()
-    return biliJson<SearchBody>(
-      `https://api.bilibili.com/x/web-interface/wbi/search/type?${await encWbiQuery(baseParams)}`,
-      { Referer: 'https://www.bilibili.com/', Cookie: session.cookie },
-    )
-  }
-
   try {
-    let res = await doSearch()
+    const session = await getBiliSession()
+    const baseParams = {
+      search_type: 'video',
+      keyword,
+      order: 'totalrank',
+      page,
+    }
 
-    // ① 被风控拦截（HTTP 412）：刷新会话与 WBI 密钥后重试一次
-    if (res.status === 412) {
-      console.warn('[bilibili] 搜索被风控拦截（412），刷新会话后重试')
-      resetSession()
-      res = await doSearch()
-      if (res.status === 412) {
-        return {
-          code: -412,
-          message: `bilibili 搜索被风控拦截（412）${antiCrawlHint()}`,
+    const doSearch = async (signed: string) =>
+      $fetch<{
+        code: number
+        message: string
+        data?: {
+          numResults?: number
+          numPages?: number
+          result?: SearchResultItem[]
+          v_voucher?: string
         }
-      }
-    }
+      }>(`https://api.bilibili.com/x/web-interface/wbi/search/type?${signed}`, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          Referer: 'https://www.bilibili.com/',
+          Cookie: session.cookie,
+        },
+      })
 
-    // ② 签名校验被拦（返回体中的 v_voucher）：刷新密钥后重试一次
-    if (res.data?.code === 0 && res.data.data?.v_voucher) {
+    let res = await doSearch(await encWbiQuery(baseParams))
+
+    // 签名校验被拦（v_voucher）时，刷新 WBI 密钥重试一次
+    if (res.code === 0 && res.data?.v_voucher) {
       resetWbiCache()
-      res = await doSearch()
+      res = await doSearch(await encWbiQuery(baseParams))
     }
 
-    if (!res.data) {
-      return {
-        code: res.status || -1,
-        message: `bilibili 搜索请求失败：${res.error ?? '未知原因'}${
-          res.status === 412 ? antiCrawlHint() : ''
-        }`,
-      }
-    }
-    if (res.data.code === 0 && res.data.data?.v_voucher) {
+    if (res.code === 0 && res.data?.v_voucher) {
       return { code: -403, message: 'bilibili WBI 签名校验异常，请稍后再试' }
     }
-    const body = res.data.data
-    if (res.data.code !== 0 || !body) {
-      return { code: res.data.code, message: biliErrorMessage(res.data.code, res.data.message) }
+    if (res.code !== 0 || !res.data) {
+      return { code: res.code, message: biliErrorMessage(res.code, res.message) }
     }
 
-    const items = (body.result ?? []).map((item) => ({
+    const items = (res.data.result ?? []).map((item) => ({
       id: item.bvid,
       title: cleanTitle(item.title),
       source: 'bilibili' as const,
@@ -155,19 +129,15 @@ export default defineEventHandler(async (event) => {
       pubdate: item.pubdate,
     }))
 
-    const total = body.numResults ?? items.length
+    const total = res.data.numResults ?? items.length
     const numPages =
-      body.numPages && body.numPages > 0
-        ? Math.min(body.numPages, 50)
+      res.data.numPages && res.data.numPages > 0
+        ? Math.min(res.data.numPages, 50)
         : Math.max(1, Math.ceil(total / 20))
 
     return { code: 0, message: 'ok', data: { items, page, total, numPages } }
   } catch (err: any) {
     if (err?.statusCode) throw err
-    console.error('[bilibili] 搜索异常：', err?.message ?? err)
-    return {
-      code: -1,
-      message: `bilibili 搜索异常：${err?.message ?? '未知错误'}${antiCrawlHint()}`,
-    }
+    return { code: -1, message: '搜索服务异常：' + (err?.message ?? '未知错误') }
   }
 })
