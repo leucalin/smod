@@ -297,6 +297,49 @@ button {
   line-height: 1.5;
 }
 
+.foot-name {
+  font-size: 11px;
+  letter-spacing: 0.01em;
+}
+
+.foot-meta {
+  margin-top: 5px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.foot-meta .version {
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.foot-meta .dot {
+  opacity: 0.55;
+}
+
+.foot-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.15s ease-out;
+}
+
+.foot-link:hover {
+  color: var(--accent);
+}
+
+.foot-link svg {
+  opacity: 0.85;
+}
+
 /* ---------- 按钮 ---------- */
 .btn {
   display: inline-flex;

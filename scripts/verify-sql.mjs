@@ -121,11 +121,23 @@ await run('listCourses', `SELECT * FROM courses ORDER BY created_at DESC, id DES
 await run(
   'listCourseMusics（JOIN）',
   `SELECT cm.id AS cm_id, cm.position, cm.is_played, m.id AS music_id, m.title, m.source,
-          m.artist, m.album, m.cover, m.up, m.duration, m.bvid, m.aid, m.play, m.pubdate
+          m.artist, m.album, m.cover, m.up, m.duration, m.bvid, m.aid, m.play, m.pubdate, m.netease_id
    FROM course_musics cm JOIN musics m ON m.id = cm.music_id
    WHERE cm.course_id = $1 ORDER BY cm.position, cm.id`,
   [cid],
 )
+const courseRows = await db.query(
+  `SELECT m.netease_id, m.bvid, m.title FROM course_musics cm JOIN musics m ON m.id = cm.music_id WHERE cm.course_id = $1`,
+  [cid],
+)
+const fields = Object.keys(courseRows.rows[0] ?? {})
+console.log('     课程歌曲返回字段:', fields.join(','))
+console.log(
+  fields.includes('netease_id') && fields.includes('bvid')
+    ? '     ✓ 播放所需字段（netease_id / bvid）齐全'
+    : '     ✗ 缺少播放所需字段',
+)
+
 const targetMusicId = assigned[0]?.music_id
 await run(
   '补位：删除未播放引用',

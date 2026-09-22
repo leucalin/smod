@@ -614,7 +614,7 @@ export async function listCourseMusics(courseId: string): Promise<CourseSongRow[
   const rows = await getSql()`
     SELECT cm.id AS cm_id, cm.position, cm.is_played,
            m.id AS music_id, m.title, m.source, m.artist, m.album, m.cover,
-           m.up, m.duration, m.bvid, m.aid, m.play, m.pubdate
+           m.up, m.duration, m.bvid, m.aid, m.play, m.pubdate, m.netease_id
     FROM course_musics cm
     JOIN musics m ON m.id = cm.music_id
     WHERE cm.course_id = ${courseId}
