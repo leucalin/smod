@@ -16,37 +16,8 @@ interface SearchResultItem {
   duration: string
   play: number
   pubdate: number
-}
-
-const TOP_TITLE_WORDS = /(《|【|MV|mv|官方|完整|超清|高清|1080|4K|无损|现场|live|Live|翻唱|剪辑|remix|伴奏|纯享|修复|合集|歌词|动态|精选|经典|串烧|循环|后台|播放)/
-
-/** 从标题启发式提取歌手名；无法确定时返回空（前端显示“未知歌手”） */
-function parseArtist(title: string): string {
-  const m = title.match(/^(.*?)\s*[-–—－·]\s*(.+?)$/)
-  if (!m) return ''
-  const rawLeft = m[1].trim()
-  const rawRight = m[2].trim()
-  const stripDecor = (s: string) =>
-    s
-      .replace(/【[^】]*】/g, '')
-      .replace(/\[[^\]]*\]/g, '')
-      .replace(/[（）()]/g, '')
-      .trim()
-  const core = (s: string) =>
-    stripDecor(s)
-      .split(/[“”"'\s,，。:：|#「」]/)[0]
-      .replace(/[^\u4e00-\u9fa5\w]/g, '')
-      .trim()
-  const plausible = (s: string) =>
-    s.length > 0 && s.length <= 6 && !TOP_TITLE_WORDS.test(s)
-
-  const r = core(rawRight)
-  const l = stripDecor(rawLeft)
-
-  // 仅强信号：左侧是书名号包裹的歌名（如「《孤勇者》-陈奕迅」），取右侧头部为歌手
-  // 「A - B」裸格式无法区分歌名/歌手，返回空而不猜测
-  if (l.startsWith('《') && plausible(r)) return r
-  return ''
+  /** 视频标签，逗号分隔 */
+  tag?: string
 }
 
 /** 去掉 <em class="keyword"> 高亮标签 */
@@ -118,8 +89,15 @@ export default defineEventHandler(async (event) => {
       id: item.bvid,
       title: cleanTitle(item.title),
       source: 'bilibili' as const,
-      artist: parseArtist(cleanTitle(item.title)),
+      // MV 的歌手/专辑信息大多不可靠，卡片改为展示视频标签
+      artist: '',
       album: '',
+      tags: (item.tag ?? '')
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean)
+        .slice(0, 6)
+        .join(','),
       cover: item.pic.startsWith('//') ? `https:${item.pic}` : item.pic,
       up: item.author,
       duration: formatDuration(item.duration ?? ''),

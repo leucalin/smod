@@ -127,15 +127,15 @@ await run(
   [cid],
 )
 const courseRows = await db.query(
-  `SELECT m.netease_id, m.bvid, m.title FROM course_musics cm JOIN musics m ON m.id = cm.music_id WHERE cm.course_id = $1`,
+  `SELECT m.netease_id, m.bvid, m.tags, m.title FROM course_musics cm JOIN musics m ON m.id = cm.music_id WHERE cm.course_id = $1`,
   [cid],
 )
 const fields = Object.keys(courseRows.rows[0] ?? {})
 console.log('     课程歌曲返回字段:', fields.join(','))
 console.log(
-  fields.includes('netease_id') && fields.includes('bvid')
-    ? '     ✓ 播放所需字段（netease_id / bvid）齐全'
-    : '     ✗ 缺少播放所需字段',
+  fields.includes('netease_id') && fields.includes('bvid') && fields.includes('tags')
+    ? '     ✓ 播放与展示所需字段（netease_id / bvid / tags）齐全'
+    : '     ✗ 缺少所需字段',
 )
 
 const targetMusicId = assigned[0]?.music_id

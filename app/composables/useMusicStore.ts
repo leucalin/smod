@@ -24,6 +24,8 @@ export interface MusicItem {
   pubdate?: number
   /** 网易云歌曲 id */
   neteaseId?: number
+  /** bilibili 视频标签（逗号分隔） */
+  tags?: string
 }
 
 export interface CourseItem {
@@ -146,6 +148,31 @@ export const useMusicStore = () => {
     musics.value = musics.value.filter((m) => m.id !== id)
     // 课程统计可能受级联影响，刷新课程
     await loadCourses()
+  }
+
+  /**
+   * 为缺少标签的 MV 批量补全标签（搜索添加时已带标签；历史数据在此补齐）
+   * 服务端会同时把标签回写数据库，后续访问无需重复请求
+   */
+  const fetchMissingTags = async () => {
+    const missing = musics.value
+      .filter((m) => m.bvid && !m.tags)
+      .slice(0, 12)
+      .map((m) => m.bvid!) 
+    if (!missing.length) return
+    try {
+      const res = await $fetch<{
+        code: number
+        data?: { tags: Record<string, string> }
+      }>('/api/bilibili/tags', { method: 'POST', body: { bvids: missing } })
+      const tags = res.code === 0 ? res.data?.tags ?? {} : {}
+      if (!Object.keys(tags).length) return
+      musics.value = musics.value.map((m) =>
+        m.bvid && tags[m.bvid] ? { ...m, tags: tags[m.bvid] } : m,
+      )
+    } catch {
+      // 标签补全失败不影响主流程
+    }
   }
 
   /* ---------- 课程 ---------- */
@@ -286,6 +313,7 @@ export const useMusicStore = () => {
     loadMusics,
     addMusic,
     removeMusic,
+    fetchMissingTags,
     isAddedByBvid,
     loadCourses,
     createCourse,

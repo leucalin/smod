@@ -23,6 +23,8 @@ export interface MusicRow {
   pubdate?: number
   /** 网易云歌曲 id */
   neteaseId?: number
+  /** bilibili 视频标签（逗号分隔） */
+  tags?: string
   /** 已从音乐列表移除（软删除，课程分配记录保留） */
   removed?: boolean
 }
@@ -154,11 +156,13 @@ const DDL_STATEMENTS = [
   play BIGINT,
   pubdate BIGINT,
   netease_id BIGINT,
+  tags TEXT,
   removed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );`,
   `ALTER TABLE musics ADD COLUMN IF NOT EXISTS netease_id BIGINT;`,
   `ALTER TABLE musics ADD COLUMN IF NOT EXISTS removed_at TIMESTAMPTZ;`,
+  `ALTER TABLE musics ADD COLUMN IF NOT EXISTS tags TEXT;`,
   `CREATE UNIQUE INDEX IF NOT EXISTS uniq_musics_netease
   ON musics(netease_id) WHERE netease_id IS NOT NULL;`,
   `CREATE TABLE IF NOT EXISTS courses (
@@ -248,6 +252,7 @@ const rowToMusic = (row: Record<string, any>): MusicRow => ({
   play: row.play != null ? Number(row.play) : undefined,
   pubdate: row.pubdate != null ? Number(row.pubdate) : undefined,
   neteaseId: row.netease_id != null ? Number(row.netease_id) : undefined,
+  tags: row.tags ?? undefined,
   removed: row.removed_at != null,
 })
 
@@ -278,6 +283,7 @@ const cleanMusic = (
     play: body.play != null ? Number(body.play) : undefined,
     pubdate: body.pubdate != null ? Number(body.pubdate) : undefined,
     neteaseId: body.neteaseId != null ? Number(body.neteaseId) : undefined,
+    tags: body.tags ? String(body.tags) : undefined,
   }
 }
 
@@ -355,14 +361,15 @@ export async function insertMusic(
            removed_at = NULL, title = $1, source = $2, artist = $3, album = $4,
            cover = $5, up = $6, duration = $7,
            bvid = COALESCE($8, bvid), aid = $9, play = $10, pubdate = $11,
-           netease_id = COALESCE($12, netease_id)
-         WHERE id = $13
+           netease_id = COALESCE($12, netease_id),
+           tags = COALESCE($13, tags)
+         WHERE id = $14
          RETURNING *`,
         [
           music.title, music.source, music.artist, music.album, music.cover,
           music.up ?? null, music.duration ?? null, music.bvid ?? null,
           music.aid ?? null, music.play ?? null, music.pubdate ?? null,
-          music.neteaseId ?? null, found[0].id,
+          music.neteaseId ?? null, music.tags ?? null, found[0].id,
         ],
       )
       return { code: wasRemoved ? 0 : 1, item: rowToMusic(updated[0]) }
@@ -370,15 +377,15 @@ export async function insertMusic(
   }
 
   const inserted = await s.query(
-    `INSERT INTO musics (title, source, artist, album, cover, up, duration, bvid, aid, play, pubdate, netease_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    `INSERT INTO musics (title, source, artist, album, cover, up, duration, bvid, aid, play, pubdate, netease_id, tags)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      ON CONFLICT DO NOTHING
      RETURNING *`,
     [
       music.title, music.source, music.artist, music.album, music.cover,
       music.up ?? null, music.duration ?? null, music.bvid ?? null,
       music.aid ?? null, music.play ?? null, music.pubdate ?? null,
-      music.neteaseId ?? null,
+      music.neteaseId ?? null, music.tags ?? null,
     ],
   )
   if (inserted.length) return { code: 0, item: rowToMusic(inserted[0]) }
@@ -614,7 +621,7 @@ export async function listCourseMusics(courseId: string): Promise<CourseSongRow[
   const rows = await getSql()`
     SELECT cm.id AS cm_id, cm.position, cm.is_played,
            m.id AS music_id, m.title, m.source, m.artist, m.album, m.cover,
-           m.up, m.duration, m.bvid, m.aid, m.play, m.pubdate, m.netease_id
+           m.up, m.duration, m.bvid, m.aid, m.play, m.pubdate, m.netease_id, m.tags
     FROM course_musics cm
     JOIN musics m ON m.id = cm.music_id
     WHERE cm.course_id = ${courseId}
@@ -705,4 +712,23 @@ export async function deleteSetting(key: string): Promise<void> {
   }
   await ensureSchema()
   await getSql()`DELETE FROM app_settings WHERE key = ${key}`
+}
+
+/** 按 bvid 回写视频标签（仅在原标签为空时写入，用于历史数据补全） */
+export async function updateMusicTagsByBvid(
+  bvid: string,
+  tags: string,
+): Promise<void> {
+  if (!bvid || !tags) return
+  if (!hasDb()) {
+    memMusics = memMusics.map((m) =>
+      m.bvid === bvid && !m.tags ? { ...m, tags } : m,
+    )
+    return
+  }
+  await ensureSchema()
+  await getSql()`
+    UPDATE musics SET tags = ${tags}
+    WHERE bvid = ${bvid} AND (tags IS NULL OR tags = '')
+  `
 }

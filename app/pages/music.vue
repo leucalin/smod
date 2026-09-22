@@ -3,11 +3,17 @@ import type { MusicItem } from '~/composables/useMusicStore'
 
 useHead({ title: '音乐列表' })
 
-const { musics, musicsLoading, loadMusics, removeMusic } = useMusicStore()
+const { musics, musicsLoading, loadMusics, removeMusic, fetchMissingTags } =
+  useMusicStore()
 const { showToast } = useToast()
 
 // SSR + CSR 复用同一份数据
 await useAsyncData('music-list-fetch', () => loadMusics())
+
+// 客户端补齐历史 MV 的视频标签（搜索新添加的已带标签）
+onMounted(() => {
+  fetchMissingTags()
+})
 
 /* ---------- 删除音乐 ---------- */
 

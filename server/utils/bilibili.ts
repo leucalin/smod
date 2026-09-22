@@ -273,31 +273,74 @@ export async function getStreamUrl(bvid: string): Promise<StreamInfo | null> {
   }
   const cid = view.data.cid
 
-  // 2. 取 MP4 播放地址（durl；qn=80+try_look 未登录最高可拿 1080P，降级自动）
-  const playUrl = await $fetch<{
+  // 2. 取 MP4 播放地址（durl）
+  //    目标 1080P（qn=80）：html5 + high_quality 档位最高，
+  //    登录态下 try_look 可能反而降级，故多档依次尝试，取实际清晰度最高的一档
+  interface PlayUrlBody {
     code: number
     message?: string
     data?: {
       quality?: number
       durl?: { length?: number; url?: string }[]
     }
-  }>(
-    `https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=80&fnval=1&fourk=0&try_look=1&platform=html5&high_quality=1`,
-    { headers },
-  )
-  const durl = playUrl.data?.durl?.[0]
-  if (playUrl.code !== 0 || !durl?.url) {
-    return null
+  }
+  const variants = [
+    'qn=80&fnval=1&fourk=0&try_look=1&platform=html5&high_quality=1',
+    'qn=80&fnval=1&fourk=0&platform=html5&high_quality=1',
+    'qn=80&fnval=1&fourk=0&try_look=1',
+  ]
+
+  let best: StreamInfo | null = null
+  for (const variant of variants) {
+    const res = await $fetch<PlayUrlBody>(
+      `https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&${variant}`,
+      { headers },
+    ).catch(() => null)
+    const durl = res?.data?.durl?.[0]
+    if (res?.code === 0 && durl?.url) {
+      const candidate: StreamInfo = {
+        cid,
+        url: durl.url,
+        lengthMs: durl.length ?? 0,
+        quality: res.data?.quality ?? 0,
+      }
+      if (!best || candidate.quality > best.quality) best = candidate
+      // 已达到 1080P（80）或更高，无需继续尝试
+      if (candidate.quality >= 80) break
+    }
+    await new Promise((r) => setTimeout(r, 150))
   }
 
-  const info: StreamInfo = {
-    cid,
-    url: durl.url,
-    lengthMs: durl.length ?? 0,
-    quality: playUrl.data?.quality ?? 0,
+  if (!best) return null
+  streamCache.set(bvid, { ...best, at: Date.now() })
+  return best
+}
+
+/**
+ * 获取视频标签（稿件 TAG 接口：/x/tag/archive/tags），用于 MV 卡片展示
+ * 注意：view 接口已不再返回 tags 字段
+ */
+export async function getVideoTags(bvid: string): Promise<string[]> {
+  try {
+    const session = await getBiliSession()
+    const res = await $fetch<{
+      code: number
+      data?: { tag_name?: string }[]
+    }>(`https://api.bilibili.com/x/tag/archive/tags?bvid=${bvid}`, {
+      headers: {
+        ...BROWSER_HEADERS,
+        Referer: `https://www.bilibili.com/video/${bvid}`,
+        Cookie: session.cookie,
+      },
+    })
+    if (res.code !== 0 || !Array.isArray(res.data)) return []
+    return res.data
+      .map((t) => (typeof t === 'string' ? t : t?.tag_name ?? ''))
+      .filter(Boolean)
+      .slice(0, 8)
+  } catch {
+    return []
   }
-  streamCache.set(bvid, { ...info, at: Date.now() })
-  return info
 }
 
 /* ---------- 扫码登录 ---------- */

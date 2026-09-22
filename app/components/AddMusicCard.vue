@@ -50,6 +50,16 @@ const isItemAdded = (item: MusicItem) =>
     ? isAddedByNeteaseId(item.neteaseId)
     : isAddedByBvid(item.bvid)
 
+/** 结果条目是否为 MV（bilibili 视频） */
+const isMVResult = (item: MusicItem) => item.source === 'bilibili'
+
+/** MV 标签（最多展示 3 个） */
+const tagsOf = (item: MusicItem) =>
+  (item.tags ?? '')
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean)
+
 const fetchPage = async (target: number, opts: { resetError?: boolean } = {}) => {
   if (searching.value) return
   searching.value = true
@@ -211,7 +221,15 @@ const continueSearch = () => {
         </div>
         <div class="info">
           <p class="title" :title="item.title">{{ item.title }}</p>
-          <p class="artist">
+
+          <!-- MV：展示视频标签（歌手/专辑在 MV 中多不可靠） -->
+          <div v-if="isMVResult(item) && tagsOf(item).length" class="tags">
+            <span v-for="t in tagsOf(item).slice(0, 3)" :key="t" class="tag">{{ t }}</span>
+            <span v-if="tagsOf(item).length > 3" class="tag more">
+              +{{ tagsOf(item).length - 3 }}
+            </span>
+          </div>
+          <p v-else class="artist">
             {{ item.artist || '未知歌手' }}<span v-if="item.album"> · {{ item.album }}</span>
           </p>
           <button
@@ -439,6 +457,33 @@ const continueSearch = () => {
 .add-btn {
   margin-top: 10px;
   width: 100%;
+}
+
+/* 搜索结果中的 MV 标签 */
+.tags {
+  margin-top: 7px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.tag {
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 7px;
+  background: var(--fill);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tag.more {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 
 .no-result {

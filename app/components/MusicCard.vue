@@ -12,6 +12,16 @@ const emit = defineEmits<{
 
 /** MV（bilibili 视频）为竖版 16:9 卡片；其他歌曲为横版 + 正方形封面 */
 const isMV = computed(() => Boolean(props.music.bvid))
+
+/** MV 的视频标签（最多展示 3 个，其余以 +N 提示） */
+const tagList = computed(() =>
+  (props.music.tags ?? '')
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean),
+)
+const visibleTags = computed(() => tagList.value.slice(0, 3))
+const restTagCount = computed(() => Math.max(0, tagList.value.length - 3))
 </script>
 
 <template>
@@ -47,7 +57,23 @@ const isMV = computed(() => Boolean(props.music.bvid))
     </div>
     <div class="body">
       <h3 class="title" :title="music.title">{{ music.title }}</h3>
-      <dl class="meta">
+
+      <!-- MV：展示视频标签与 UP 主（歌手/专辑信息在 MV 中多不可靠） -->
+      <template v-if="isMV">
+        <div v-if="visibleTags.length" class="tags" :title="tagList.join(' · ')">
+          <span v-for="t in visibleTags" :key="t" class="tag">{{ t }}</span>
+          <span v-if="restTagCount" class="tag more">+{{ restTagCount }}</span>
+        </div>
+        <dl class="meta">
+          <div v-if="music.up" class="row up">
+            <dt>UP 主</dt>
+            <dd>{{ music.up }}</dd>
+          </div>
+        </dl>
+      </template>
+
+      <!-- 歌曲（网易云等）：保留歌手 / 专辑信息 -->
+      <dl v-else class="meta">
         <div class="row">
           <dt>歌手</dt>
           <dd>{{ music.artist || '未知' }}</dd>
@@ -56,11 +82,7 @@ const isMV = computed(() => Boolean(props.music.bvid))
           <dt>专辑</dt>
           <dd :title="music.album">{{ music.album || '未知' }}</dd>
         </div>
-        <div v-if="music.up" class="row up">
-          <dt>UP 主</dt>
-          <dd>{{ music.up }}</dd>
-        </div>
-        <div v-if="music.duration && !isMV" class="row">
+        <div v-if="music.duration" class="row">
           <dt>时长</dt>
           <dd>{{ music.duration }}</dd>
         </div>
@@ -218,5 +240,37 @@ const isMV = computed(() => Boolean(props.music.bvid))
 .row.up dd {
   color: var(--bili);
   font-weight: 500;
+}
+
+/* MV 视频标签 */
+.tags {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag {
+  max-width: 100%;
+  padding: 3px 9px;
+  border-radius: 8px;
+  background: var(--fill);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background-color 0.15s ease-out, color 0.15s ease-out;
+}
+
+.music-card:hover .tag {
+  background: var(--fill-hover);
+}
+
+.tag.more {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 </style>
